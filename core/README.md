@@ -45,6 +45,12 @@ All four page tools take `--size WxH` (default `1920x1080`, even numbers) and `-
 
 **mux** runs a two-pass `loudnorm` to −14 LUFS / true peak −1.2 dB, adds film grain (`grain` 0 = none) and prints the measured loudness. Silent audio is left at its level with a warning; short audio is padded, long audio cut at the picture's end; missing, damaged or truncated audio is refused. It never leaves a partial file.
 
+## Edit
+
+| Command | What it does |
+|---|---|
+| `node core/edit/assemble.mjs <edit.json> [--out out.mp4] [--dry-run]` | cut stage: join rendered clips (trim · reorder · xfade transitions), place audio, export .srt, master through mux.sh. EDL schema + the full step-by-step pipeline: [`core/edit/EDITING.md`](edit/EDITING.md) |
+
 ## Audio
 
 | Command | What it does |

@@ -51,6 +51,9 @@ All four page tools take `--size WxH` (default `1920x1080`, even numbers) and `-
 |---|---|
 | `node core/edit/assemble.mjs <edit.json> [--out out.mp4] [--dry-run]` | cut stage: join rendered clips (trim · reorder · xfade transitions), place audio, export .srt, master through mux.sh. EDL schema + the full step-by-step pipeline: [`core/edit/EDITING.md`](edit/EDITING.md) |
 | `node core/edit/split.mjs <input.mp4> <parts\|sec-per-part> [--out dir] [--dry-run]` | auto-split into equal parts cut on REAL frame boundaries (frame index + snap, adapted from tanmoymondal1312/auto-cut, MIT) — parallel segment jobs, per-part duration validated. For multi-part social delivery |
+| `.venv/bin/python core/clips/tighten.py <in> [--noise -35dB] [--min 0.6] [--ranges out.json]` | dead-air removal — silencedetect → kept ranges → one-pass trim/concat (idea from kleZ799/clipmint autoedit, MIT). `--ranges` writes the kept ranges as JSON |
+| `.venv/bin/python core/clips/wordsrt.py <media> [--lang th\|en] [--words 4] [--pause 0.6]` | word/char-level caption cues from faster-whisper → cues.json (assemble burn-ready) + .srt. Thai: asr_check words.json (รายอักขระ) reusable via `--voice-dir` + `--only`/`--offset` |
+| `node core/clips/reframe916.mjs <in> [--pos 0.5] [--width 1080]` | 9:16 reframe — crop window as a travel fraction 0..1 (clipmint framing.py convention) |
 
 ## Audio
 

@@ -42,6 +42,8 @@ jobs:
           git checkout -- styleboard/index.html   # discard the machine-dependent rebuild; the committed one is the source of truth for the card markup
       # every film the gallery links must be in the site, or its card opens a dead player (e.g. a style pushed before its films were published)
       - name: check that every linked film is in the site
+        env:
+          GH_TOKEN: ${{ github.token }}   # the thanks check calls gh release view — unauthenticated calls share the runner IP's rate limit and fail at random
         run: |
           links=$( { grep -o 'data-src="films/[^"]*"' _site/index.html || true; } | sed 's/^data-src="//; s/"$//' | sort -u)
           [ -n "$links" ] || { echo "::error::_site/index.html links no films: did the gallery markup change?"; exit 1; }

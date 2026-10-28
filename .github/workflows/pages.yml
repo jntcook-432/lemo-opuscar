@@ -30,6 +30,16 @@ jobs:
       - run: gh release download web --repo "$GITHUB_REPOSITORY" --pattern '*.mp4' --dir _site/films
         env:
           GH_TOKEN: ${{ github.token }}
+      # the committed thanks/opuscar98 pages, catalog and style lists are build output — a hand edit or a forgotten
+      # re-run makes them drift from the generator. (styleboard/index.html is left out on purpose: its play buttons
+      # depend on the building machine's local films, so it is only reproducible on the owner's machine — the
+      # film-link check below covers what matters about it.)
+      - name: check that committed styleboard pages match the generator
+        run: |
+          python3 styleboard/build.py
+          git diff --exit-code -- styleboard/thanks/index.html styleboard/opuscar98/index.html styleboard/catalog.json styles/README.md AGENTS.md \
+            || { echo "::error::committed styleboard pages are stale — run 'python3 styleboard/build.py' on a machine with the films and commit the output"; git --no-pager diff --stat -- styleboard styleboard/catalog.json styles/README.md AGENTS.md; exit 1; }
+          git checkout -- styleboard/index.html   # discard the machine-dependent rebuild; the committed one is the source of truth for the card markup
       # every film the gallery links must be in the site, or its card opens a dead player (e.g. a style pushed before its films were published)
       - name: check that every linked film is in the site
         run: |
@@ -46,6 +56,17 @@ jobs:
             [ -s "_site/$f" ] || { echo "::error::the gallery links $f but it is not in _site (is it missing from the 'web' release? run tools/publish.sh)"; missing=1; }
           done
           echo "$(echo "$links" | wc -l) linked films checked, $(echo "$expected" | wc -l) expected from the catalog"
+          # the thank-you page links its own films (src="../films/<id>.mp4") and a 1080p link per film on the "thanks" release —
+          # both must exist, or the page ships a dead player and a dead download (this is how stars6000 nearly shipped)
+          tlinks=$( { grep -o 'src="\.\./films/[^"]*\.mp4"' _site/thanks/index.html || true; } | sed 's/^src="\.\.\///; s/"$//' | sort -u)
+          [ -n "$tlinks" ] || { echo "::error::_site/thanks/index.html links no films: did the thanks markup change?"; exit 1; }
+          tassets=$(gh release view thanks --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null || true)
+          for f in $tlinks; do
+            [ -s "_site/$f" ] || { echo "::error::the thanks page links $f but it is not in _site (is it missing from the 'web' release? run tools/publish.sh)"; missing=1; }
+            id=$(basename "$f" .mp4)
+            grep -qx "$id.mp4" <<< "$tassets" || { echo "::error::the 'thanks' release is missing $id.mp4 — the 1080p link on the thanks page would 404 (run tools/publish.sh)"; missing=1; }
+          done
+          echo "$(echo "$tlinks" | wc -l) thank-you films checked against the 'web' and 'thanks' releases"
           [ "$missing" = 0 ]
       - uses: actions/upload-pages-artifact@v5
         with:

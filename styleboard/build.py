@@ -272,7 +272,7 @@ open(os.path.join(out_dir, 'opuscar98', 'index.html'), 'w', encoding='utf-8').wr
     '{{DESC}}': html.escape(FILM_DESC), '{{HEAD_META}}': film_meta,
     '{{FEATURE_POSTER}}': '../' + FEATURE['poster'], '{{FEATURE_SRC}}': '../' + FEATURE['src'],
     '{{BOOK_TABS}}': book_tabs, '{{BOOK_KINDS}}': book_kinds, '{{BOOK_FILMS}}': book_films}))
-# Thank-you films (made at 300, 800, 2,000, 3,000 and 6,000 stars): their own page. Like OPUSCAR 98 the films are not in the repo;
+# Thank-you films (one per milestone — the list below is the single source of truth): their own page. Like OPUSCAR 98 the films are not in the repo;
 # the 720p cuts are on the "web" release as stars<n>.mp4 (copied into the site), 1080p on the "thanks" release, posters in img/thanks/.
 THANKS_REL = f'https://github.com/{REPO}/releases/download/thanks'
 THANKS = [  # (id, title, Chinese title, length, date, description, Chinese description)
@@ -292,15 +292,39 @@ THANKS = [  # (id, title, Chinese title, length, date, description, Chinese desc
      'In one continuous shot Clawd lights 300 stars, each in a different style; pulled back, they spell 300.',
      'Clawd 一镜到底点亮 300 颗星，每颗一种画风；镜头拉远，它们拼成 300。')]
 THANKS_URL = SITE_URL + 'thanks/'
-THANKS_ALIAS = {'stars6000': 'stars5000'}   # the 6,000-star cut replaced the 5,000-star one; old #stars5000 links land on it
-THANKS_DESC = 'Lemo-Opuscar thank-you films at 300, 800, 2,000, 3,000 and 6,000 GitHub stars, each made entirely in code by Claude Opus 5.5, with no video model.'
+# retired film id → the current cut that replaced it (old #stars5000 links land on the stars6000 section).
+# Keyed old → new on purpose; the assertions below make a backwards-keyed map (or an alias pointing at a
+# retired film) fail the build loudly instead of silently dropping the anchor (review 2026-10-28).
+THANKS_ALIAS = {'stars5000': 'stars6000'}
+_thanks_ids = {t[0] for t in THANKS}
+assert all(v in _thanks_ids for v in THANKS_ALIAS.values()), 'THANKS_ALIAS values must be current THANKS film ids'
+assert not (set(THANKS_ALIAS) & _thanks_ids), 'THANKS_ALIAS keys must be retired (old) ids, not current ones'
+
+def stars_list():
+    """'300, 800, 2,000, 3,000 and 6,000' — derived from THANKS so a new milestone film updates every generated string."""
+    ns = sorted(int(fid[5:]) for fid, *_ in THANKS)
+    return ', '.join(f'{n:,}' for n in ns[:-1]) + ' and ' + f'{ns[-1]:,}'
+THANKS_MILESTONES = stars_list()
+THANKS_DESC = f'Lemo-Opuscar thank-you films at {THANKS_MILESTONES} GitHub stars, each made entirely in code by Claude Opus 5.5, with no video model.'
+
+def check_readme_milestones():
+    """The README tables list the thank-you films by hand — a new film in THANKS without a README row fails the build here."""
+    for r in ('README.md', 'README.zh-CN.md'):
+        p = os.path.join(ROOT, r)
+        if not os.path.exists(p): continue
+        txt = open(p, encoding='utf-8').read()
+        for fid, *_ in THANKS:
+            n = int(fid[5:])
+            if f'{n:,}' not in txt and str(n) not in txt:
+                print(f'::error::{r} never mentions the {fid} milestone — add it to the thank-you film table')
+                raise SystemExit(1)
 
 def thanks_films():
     e = html.escape
     def one(f):
         fid, en, zh, dur, day, d_en, d_zh = f
         src = f'../films/{fid}.mp4' if site else f'../../.release/web/{fid}.mp4'
-        alias = f'<span id="{THANKS_ALIAS[fid]}"></span>' if fid in THANKS_ALIAS else ''
+        alias = ''.join(f'<span id="{old}"></span>' for old, cur in THANKS_ALIAS.items() if cur == fid)
         return (f'<section class="film" id="{fid}">{alias}<div class="frame"><video controls preload="metadata" playsinline poster="../img/thanks/{fid}.jpg" src="{src}"></video></div>\n'
                 f' <div class="cap"><h2>{e(en)}</h2><span class="cn">{e(zh)}</span><span class="meta">{dur} · {day} · <a href="{THANKS_REL}/{fid}.mp4">1080p ↓</a></span></div>\n'
                 f' <p class="desc">{e(d_en)}</p><p class="desc-cn">{e(d_zh)}</p></section>')
@@ -332,7 +356,7 @@ def llms_txt():
            f'- [Agent instructions]({BLOB_URL}/AGENTS.md): how an agent directs a film in one of the styles',
            f'- [Gallery]({SITE_URL}): every style with its demo film',
            f'- [OPUSCAR 98]({FILM_URL}): 98 Years of Best Picture ({FEATURE["dur"]}), the feature film made with these tools',
-           f'- [Thank-you films]({THANKS_URL}): films made at 300, 800, 2,000, 3,000 and 6,000 stars',
+           f'- [Thank-you films]({THANKS_URL}): films made at {THANKS_MILESTONES} stars',
            f'- [OPUSCAR 98, all 98 styles]({FILM_URL}#styles): per film the style, a reusable style prompt, and the shots and direction '
            f'(as JSON: {FILM_URL}styles.json)', '']
     for cn, en in cats:
@@ -418,6 +442,7 @@ if not site:
     t2 = re.sub(r'(<!-- style-list:start -->\n).*?(<!-- style-list:end -->)', lambda m: m.group(1) + style_list() + m.group(2), t, flags=re.S)
     if t2 != t: open(p, 'w', encoding='utf-8').write(t2)
 
+check_readme_milestones()
 print(f'{len(styles)} styles ({n_vid} with film, {minutes:.0f} min) → {os.path.relpath(os.path.join(out_dir, "index.html"), ROOT)}')
 for s in styles:
     if not s['imgs']: print('  no image:', s['slug'])

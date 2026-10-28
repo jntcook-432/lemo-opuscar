@@ -140,6 +140,15 @@ edit.json (แก้ต่อได้) · เครดิตดนตรี/ฟ
 
 ---
 
+## §3b แตกหนังเป็นหลายส่วน (multi-part delivery)
+
+```sh
+node core/edit/split.mjs films/<p>/out/final.mp4 3          # 3 ส่วนเท่ากัน
+node core/edit/split.mjs films/<p>/out/final.mp4 60 --dry-run  # ส่วนละ ~60 วินาที
+```
+จุดตัดทุกจุด snap ไปยัง "เฟรมจริงเฟรมแรกที่ ≥ เวลานั้น" (index เฟรมทั้งไฟล์) — ส่วนต่อส่วนเล่นต่อเนื่อง
+ไม่มีเฟรมซ้ำ/หลุด (ยืมแนวคิดจาก tanmoymondal1312/auto-cut, MIT) · ใช้แปลงหนังเป็นซีรีส์หลายส่วนสำหรับ IG/TikTok
+
 ## §4 เทียบสาย one-timeline กับสายตัดต่อ
 
 | | one timeline | ตัดต่อ (assemble) |

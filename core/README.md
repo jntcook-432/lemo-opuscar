@@ -50,6 +50,7 @@ All four page tools take `--size WxH` (default `1920x1080`, even numbers) and `-
 | Command | What it does |
 |---|---|
 | `node core/edit/assemble.mjs <edit.json> [--out out.mp4] [--dry-run]` | cut stage: join rendered clips (trim · reorder · xfade transitions), place audio, export .srt, master through mux.sh. EDL schema + the full step-by-step pipeline: [`core/edit/EDITING.md`](edit/EDITING.md) |
+| `node core/edit/split.mjs <input.mp4> <parts\|sec-per-part> [--out dir] [--dry-run]` | auto-split into equal parts cut on REAL frame boundaries (frame index + snap, adapted from tanmoymondal1312/auto-cut, MIT) — parallel segment jobs, per-part duration validated. For multi-part social delivery |
 
 ## Audio
 

@@ -41,6 +41,11 @@ const run = (cmd, args, opts = {}) => {
   try { return execFileSync(cmd, args, { encoding: 'utf8', ...opts }); }
   catch (e) { die(`${cmd} failed: ${(e.stderr || e.stdout || e.message).toString().split('\n').filter(Boolean).slice(-4).join('\n')}`); }
 };
+const resolveSrc = (p, fromEdit) => {          // path ใน edit.json อิงโฟลเดอร์ของ edit.json ก่อน แล้วค่อย CWD
+  if (!p || path.isAbsolute(p) || fs.existsSync(p)) return p;
+  const alt = path.join(path.dirname(path.resolve(fromEdit)), p);
+  return fs.existsSync(alt) ? alt : p;
+};
 const probe = (f, entry) => run('ffprobe', ['-v', 'error', '-show_entries', entry, '-of', 'csv=p=0', f]).trim().split('\n')[0];
 
 const argv = process.argv.slice(2);
@@ -73,6 +78,7 @@ if (!dry) fs.mkdirSync(work, { recursive: true });
 let cursor = 0;                       // length of the composite so far
 const timeline = [];
 E.clips.forEach((c, i) => {
+  c.src = resolveSrc(c.src, editPath);
   if (!fs.existsSync(c.src)) die(`clip ${i + 1}: source not found: ${c.src}`);
   const din = Number(c.in) || 0, dout = Number(c.out) || 0;
   const d = dout - din;
@@ -142,6 +148,7 @@ f.push(`[${vx}]trim=end=${total.toFixed(3)},setpts=PTS-STARTPTS[vout]`);
 const A = Array.isArray(E.audio) ? E.audio : [];
 if (!A.length) console.log('assemble.mjs: no "audio" — a silent track is mixed (mux.sh will warn; that is expected here)');
 A.forEach((a, i) => {
+  a.src = resolveSrc(a.src, editPath);
   if (!fs.existsSync(a.src)) die(`audio ${i + 1}: source not found: ${a.src}`);
   const idx = n + i;
   args.push('-i', a.src);

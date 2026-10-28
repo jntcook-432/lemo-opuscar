@@ -81,6 +81,45 @@ def plausible(decoded):
     a, sr = decoded; return len(a) >= 0.15 * sr and float(np.abs(a).max()) > 1e-3
 
 
+def synthesize_line(say, voice, rate, pitch, out_dir, line_id):
+    """สังเคราะห์หนึ่งบรรทัด: ตัดชิ้นตาม limit · ถ้าเสียงหญิง (หรือเสียงไหน) คืนว่างทั้งบรรทัด
+    (NoAudioReceived — พบจริงว่าขึ้นกับข้อความ ไม่ใช่ความยาว) ให้ตัดละเอียดขึ้นอัตโนมัติ 60→25→12
+    ก่อนยอมแพ้ — ทุกชิ้น cache ด้วย hash ของเนื้อความชิ้นนั้น"""
+    for voice_try in (voice, *([v for v in ('th-TH-NiwatNeural', 'th-TH-PremwadeeNeural') if v != voice] if 'th-TH-' in voice else [])):
+        for limit in (CHUNK, 25, 12):
+            parts = chunks(say, limit)
+            arrs = []
+            try:
+                for ch in parts:
+                    key = hashlib.sha1(json.dumps([voice_try, rate, pitch, ch], ensure_ascii=False).encode('utf-8')).hexdigest()[:16]
+                    mp3 = os.path.join(out_dir, '.cache', key + '.mp3')
+                    decoded = to_wav(mp3) if os.path.exists(mp3) else None
+                    if not plausible(decoded): decoded = None
+                    if decoded is None and os.path.exists(mp3):
+                        os.remove(mp3)
+                        print(f"tts_th.py: cached audio for line '{line_id}' was damaged; fetching it again", file=sys.stderr)
+                    if decoded is None:
+                        asyncio.run(synth(ch, voice_try, rate, pitch, mp3))
+                        decoded = to_wav(mp3)
+                        if decoded is None: sys.exit(f"tts_th.py: the audio Microsoft returned for line '{line_id}' could not be decoded (ffmpeg); try again")
+                    arrs.append(decoded[0])
+                break                               # บรรทัดนี้รอดครบทุกชิ้น
+            except SystemExit: raise
+            except Exception as e:
+                if type(e).__name__ != 'NoAudioReceived': raise
+                print(f"tts_th.py: line '{line_id}': no audio for a {len(parts)}-chunk cut ({voice_try}); retrying finer ({limit} → {max(12, limit // 2)} chars)", file=sys.stderr)
+        else:
+            continue                                # เสียงนี้พังทั้งบรรทัด — ลองเสียงถัดไป
+        if voice_try != voice:
+            print(f"tts_th.py: line '{line_id}': voice '{voice}' returned no audio for this text — SPOKE IT WITH {voice_try} instead (audible change; "
+                  f"if that matters, rewrite the line or give it a 'say' field)", file=sys.stderr)
+        break
+    if len(arrs) > 1:
+        y = np.concatenate([arrs[0]] + [np.concatenate([np.zeros(int(.09 * SR), dtype=np.float32), a]) for a in arrs[1:]])
+    else: y = arrs[0]
+    return y
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('lines'); ap.add_argument('out_dir')
@@ -98,38 +137,13 @@ def main():
         if n.endswith('.part'): os.remove(os.path.join(a.out_dir, '.cache', n))   # partial file left by an interrupted previous run
     for L in lines:
         voice, rate, pitch, say = L.get('voice', a.voice), rate_of(L, a.rate), L.get('pitch', a.pitch), L.get('say', L['text'])
-        parts = chunks(say)
-        arrs = []
-        try:
-            for ci, ch in enumerate(parts):
-                key = hashlib.sha1(json.dumps([voice, rate, pitch, ch], ensure_ascii=False).encode('utf-8')).hexdigest()[:16]
-                mp3 = os.path.join(a.out_dir, '.cache', key + '.mp3')
-                decoded = to_wav(mp3) if os.path.exists(mp3) else None
-                if not plausible(decoded): decoded = None
-                if decoded is None and os.path.exists(mp3): os.remove(mp3); print(f"tts_th.py: cached audio for line '{L['id']}' chunk {ci + 1} was damaged; fetching it again", file=sys.stderr)
-                if decoded is None:
-                    asyncio.run(synth(ch, voice, rate, pitch, mp3))
-                    decoded = to_wav(mp3)
-                    if decoded is None: sys.exit(f"tts_th.py: the audio Microsoft returned for line '{L['id']}' chunk {ci + 1} could not be decoded (ffmpeg); try again")
-                arrs.append(decoded[0])
-        except Exception as e:
-            if type(e).__name__ == 'NoAudioReceived':
-                sys.exit(f"tts_th.py: no audio came back for line '{L['id']}' (voice '{voice}', chunk {ci + 1}/{len(parts)}: \"{ch[:50]}\"). "
-                         f"Is the voice name valid (python -m edge_tts --list-voices)? If it keeps failing on every chunk, split the line or write it in the 'say' field the way it should be read.")
-            if isinstance(e, ValueError):   # the arguments themselves are wrong (e.g. the voice name doesn't exist); no request was ever sent
-                sys.exit(f"tts_th.py: line '{L['id']}': {e}  (voices: python -m edge_tts --list-voices)")
-            print(f"tts_th.py: could not reach Microsoft's speech service for line '{L['id']}': {type(e).__name__}: {str(e)[:200]}\n"
-                  "  edge-tts needs a network connection (and can be blocked by a firewall/proxy).", file=sys.stderr)
-            sys.exit(2)   # exit code 2 = network problem; 1 = bad input/configuration
-        if len(arrs) > 1:   # stitch chunks with a short breath so words across a boundary don't glue together
-            y = np.concatenate([arrs[0]] + [np.concatenate([np.zeros(int(.09 * SR), dtype=np.float32), a]) for a in arrs[1:]])
-        else: y = arrs[0]
-        sr = SR   # every chunk decodes at SR — the stitch branch above never touches a per-file sr
+        y = synthesize_line(say, voice, rate, pitch, a.out_dir, L['id'])
+        sr = SR
         nz = np.where(np.abs(y) > (np.abs(y).max() if len(y) else 0) * .02)[0]
         if len(nz): y = y[max(0, nz[0] - int(.03 * sr)): nz[-1] + int(.10 * sr)]   # trim leading/trailing silence; leave a slightly longer tail so the sentence's last ring isn't cut off
         else: print('warning: line', L['id'], 'is silent', file=sys.stderr)
         sf.write(os.path.join(a.out_dir, L['id'] + '.wav'), y, sr); dur[L['id']] = round(len(y) / sr, 3)
-        print(L['id'], dur[L['id']], f'({len(parts)} chunk)' if len(parts) > 1 else '', L['text'])
+        print(L['id'], dur[L['id']], L['text'])
     json.dump(dur, open(os.path.join(a.out_dir, 'dur.json'), 'w', encoding='utf-8'), indent=1)
 
 

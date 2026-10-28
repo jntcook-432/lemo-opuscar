@@ -13,7 +13,8 @@
  *   ],
  *   "audio":  [ {"src": "mix.wav", "at": 0.0, "gain": 1.0, "fadeIn": 0.2, "fadeOut": 0.8} ],
  *   "captions": [ {"t0": 0.2, "t1": 2.0, "text": "…"} ],
- *   "srt": "out/subs.srt"
+ *   "srt": "out/subs.srt",
+ *   "burn": true
  * }
  *
  * Semantics:
@@ -23,7 +24,8 @@
  *   · total length = Σ clip dur − Σ transition dur (printed as a timeline table before rendering)
  *   · audio entries are placed at "at" on the OUTPUT timeline (independent of clips), gain ×, with
  *     optional fades; several entries mix. Audio shorter than the picture is padded by mux.sh, longer is cut
- *   · captions become an .srt next to the output ("srt" path, default out/<name>.srt), matching srt.py's format
+ *   · captions become an .srt next to the output ("srt" path, default out/<name>.srt), matching srt.py's format;
+ *     "burn": true also burns them into the picture (libass) — for channels that ignore sidecar .srt
  *   · the master step is core/render/mux.sh: two-pass loudnorm to −14 LUFS / TP −1.2 + film grain —
  *     identical numbers to a single-timeline film, so a cut film and a rendered film match
  *
@@ -87,15 +89,20 @@ E.clips.forEach((c, i) => {
   timeline.push({ n: i + 1, src: c.src, in: din, out: dout, dur: d, tr });
 });
 
-const total = cursor;
-/* ตรวจ/ตัดทับซ้อนซับก่อน dry-run exit — เวลากลับด้าน/ศูนย์ (t1<=t0) ต้อง error เสมอ ไม่ว่าโหมดไหน */
-let cues = null;
+/* ซับ: ตรวจ → เขียน .srt (ตัดทับซ้อนก่อน — มิลลิวินาทีเดียวกับ srt.py) · burn = true จะเผาซับลงภาพตอนตัดต่อด้วย */
+let cues = null, srtPath = null;
 if (Array.isArray(E.captions) && E.captions.length) {
   cues = [...E.captions].sort((a, b) => a.t0 - b.t0);
   for (let k = 0; k < cues.length - 1; k++) cues[k].t1 = Math.min(cues[k].t1, cues[k + 1].t0);
   const bad = cues.filter(c => !(c.t1 > c.t0));
   if (bad.length) die(`captions: ${bad.length} cue(s) with t1 <= t0 (inverted or zero-length), e.g. "${bad[0].text}" at ${bad[0].t0} – ${bad[0].t1}`);
+  srtPath = E.srt || path.join(outDir, `${base}.srt`);
+  fs.mkdirSync(path.dirname(path.resolve(srtPath)), { recursive: true });
+  const fmt = (s) => { const ms = Math.round(Math.max(0, s) * 1000);
+    return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`; };
+  fs.writeFileSync(srtPath, cues.map((c, k) => `${k + 1}\n${fmt(c.t0)} --> ${fmt(c.t1)}\n${c.text}\n`).join('\n'));
 }
+const total = cursor;
 console.log('  #  in → out      dur   transition      source');
 timeline.forEach(t => console.log(
   `${String(t.n).padStart(3)}  ${t.in.toFixed(2)} → ${t.out.toFixed(2)}  ${t.dur.toFixed(2)}s  ` +
@@ -157,7 +164,7 @@ if (A.length) f.push(`${A.map((_, i) => `[a${i}]`).join('')}amix=inputs=${A.leng
   `apad=whole_dur=${total.toFixed(3)}[aout]`);
 
 const silent = !A.length;
-const videoOnly = path.join(work, 'video-cut.mp4');
+let videoOnly = path.join(work, 'video-cut.mp4');
 const mixWav = path.join(work, 'mix.wav');
 args.push('-filter_complex', f.join(';'), '-map', '[vout]',
   '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-r', String(FPS), videoOnly);
@@ -169,14 +176,32 @@ if (A.length) {   // the mix goes to its own WAV (mp4 cannot hold PCM) — mux.s
 }
 run('ffmpeg', args);
 
-/* ── captions → .srt (same millisecond rounding as core/render/srt.py) ── */
-if (cues && cues.length) {
-  const fmt = (s) => { const ms = Math.round(Math.max(0, s) * 1000);
-    return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`; };
-  const srtPath = E.srt || path.join(outDir, `${base}.srt`);
-  fs.mkdirSync(path.dirname(path.resolve(srtPath)), { recursive: true });
-  fs.writeFileSync(srtPath, cues.map((c, k) => `${k + 1}\n${fmt(c.t0)} --> ${fmt(c.t1)}\n${c.text}\n`).join('\n'));
-  console.log(`srt: ${srtPath} (${cues.length} cues)`);
+/* ── captions → .srt (เขียนไปแล้วตอนวางแผน — บรรทัดนี้แค่รายงาน) ── */
+if (cues) console.log(`srt: ${srtPath} (${cues.length} cues)`);
+
+/* ── burn: เผาซับลงภาพ (edit.json "burn": true — สำหรับช่องทางที่ไม่อ่าน .srt เช่น IG/TikTok บาง workflow)
+   ffmpeg ที่ไหนไม่มี libass/drawtext ก็ตัดต่อได้: วาดแต่ละ cue เป็น PNG โปร่งใส (Pillow, ฟอนต์ไทยได้)
+   แล้ว overlay ด้วย enable between(t,t0,t1) — ไม่พึ่ง filter เสริมเลย ── */
+if (E.burn && cues) {
+  const cueJson = path.join(work, 'cues.json');
+  fs.writeFileSync(cueJson, JSON.stringify(cues));
+  const prefix = path.join(work, 'sub');
+  run('.venv/bin/python', ['core/edit/burn_subs.py', cueJson, String(W), String(H), prefix]);
+  const bargs = ['-y', '-loglevel', 'error', '-i', videoOnly];
+  cues.forEach(c => bargs.push('-loop', '1', '-t', total.toFixed(3), '-i', `${prefix}.${cues.indexOf(c)}.png`));
+  const bf = []; let vx = '0:v';
+  cues.forEach((c, i) => {
+    const outl = i === cues.length - 1 ? '[vb]' : `[bo${i}]`;
+    bf.push(`[${vx}][${i + 1}:v]overlay=x=(main_w-overlay_w)/2:y=main_h-overlay_h-${Math.round(H * 0.06)}:` +
+      `enable='between(t,${c.t0.toFixed(3)},${c.t1.toFixed(3)})'${outl}`);
+    vx = `bo${i}`;
+  });
+  const burned = path.join(work, 'burned.mp4');
+  bargs.push('-filter_complex', bf.join(';'), '-map', '[vb]',
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', burned);
+  run('ffmpeg', bargs);
+  videoOnly = burned;
+  console.log('subtitles burned into the picture');
 }
 
 /* ── master through mux.sh — the same loudnorm/grain as every film in the library ── */

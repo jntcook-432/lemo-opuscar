@@ -16,7 +16,7 @@ Exit codes: 0 all lines pass; 1 some lines differ; 2 the check could not run (mo
 import sys, json, re, os, argparse, difflib, unicodedata
 
 CJK = re.compile('[㐀-鿿豈-﫿぀-ヿ가-힯]')
-CHAR_LANGS = {'zh', 'ja', 'ko'}           # these languages are compared by character, the rest by word
+CHAR_LANGS = {'zh', 'ja', 'ko', 'th'}     # these languages are compared by character, the rest by word (Thai: no spaces, so word-splitting is meaningless)
 _DIGITS = str.maketrans('零〇一二三四五六七八九', '00123456789')
 
 
@@ -64,7 +64,10 @@ def norm_zh(s):
 
 def detect_lang(texts):
     cjk = sum(len(CJK.findall(t)) for t in texts); latin = sum(len(re.findall('[A-Za-z]', t)) for t in texts)
-    return 'zh' if cjk and cjk >= 0.3 * (cjk + latin) else 'en'
+    thai = sum(len(re.findall('[ก-๛]', t)) for t in texts)   # Thai block: consonants, vowels, tone marks, digits ๐–๙
+    best = max(cjk, thai)
+    if best and best >= 0.3 * (best + latin): return 'zh' if best == cjk else 'th'
+    return 'en'
 
 
 def compare(want, got, lang, threshold=0.92):

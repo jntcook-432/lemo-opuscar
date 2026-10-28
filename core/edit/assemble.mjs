@@ -42,9 +42,16 @@ const run = (cmd, args, opts = {}) => {
 const probe = (f, entry) => run('ffprobe', ['-v', 'error', '-show_entries', entry, '-of', 'csv=p=0', f]).trim().split('\n')[0];
 
 const argv = process.argv.slice(2);
-const outArg = (() => { const i = argv.indexOf('--out'); return i >= 0 ? argv[i + 1] : null; })();
-const dry = argv.includes('--dry-run');
-const editPath = argv.find((a, i) => a !== '--out' && a !== '--dry-run' && argv[i - 1] !== '--out') || die('usage: node core/edit/assemble.mjs <edit.json> [--out out.mp4] [--dry-run]');
+let outArg = null, dry = false, editPath = null;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === '--dry-run') dry = true;
+  else if (a === '--out') { outArg = argv[++i]; if (outArg == null) die('--out needs a path: --out out/final.mp4'); }
+  else if (a.startsWith('--out=')) outArg = a.slice('--out='.length) || die('--out needs a path');
+  else if (editPath == null) editPath = a;
+  else die(`unexpected argument: ${a}`);
+}
+if (!editPath) die('usage: node core/edit/assemble.mjs <edit.json> [--out out.mp4] [--dry-run]');
 if (!fs.existsSync(editPath)) die(`edit list not found: ${editPath}`);
 
 const E = JSON.parse(fs.readFileSync(editPath, 'utf8'));
@@ -74,12 +81,21 @@ E.clips.forEach((c, i) => {
   const tr = c.transition && { type: String(c.transition.type || 'fade'), dur: Number(c.transition.dur) || 0.5 };
   if (tr && (i === 0 || !(tr.dur > 0))) die(`clip ${i + 1}: a transition needs a positive "dur" and cannot be on the first clip`);
   if (tr && tr.dur >= cursor) die(`clip ${i + 1}: transition ${tr.dur} s is longer than the material before it (${cursor.toFixed(2)} s)`);
+  if (tr && tr.dur >= d) die(`clip ${i + 1}: transition ${tr.dur} s is longer than the clip itself (${d.toFixed(2)} s) — the blend would be cut off mid-way`);
   const start = tr ? cursor - tr.dur : cursor;
   cursor = tr ? start + d : cursor + d;
   timeline.push({ n: i + 1, src: c.src, in: din, out: dout, dur: d, tr });
 });
 
 const total = cursor;
+/* ตรวจ/ตัดทับซ้อนซับก่อน dry-run exit — เวลากลับด้าน/ศูนย์ (t1<=t0) ต้อง error เสมอ ไม่ว่าโหมดไหน */
+let cues = null;
+if (Array.isArray(E.captions) && E.captions.length) {
+  cues = [...E.captions].sort((a, b) => a.t0 - b.t0);
+  for (let k = 0; k < cues.length - 1; k++) cues[k].t1 = Math.min(cues[k].t1, cues[k + 1].t0);
+  const bad = cues.filter(c => !(c.t1 > c.t0));
+  if (bad.length) die(`captions: ${bad.length} cue(s) with t1 <= t0 (inverted or zero-length), e.g. "${bad[0].text}" at ${bad[0].t0} – ${bad[0].t1}`);
+}
 console.log('  #  in → out      dur   transition      source');
 timeline.forEach(t => console.log(
   `${String(t.n).padStart(3)}  ${t.in.toFixed(2)} → ${t.out.toFixed(2)}  ${t.dur.toFixed(2)}s  ` +
@@ -154,9 +170,7 @@ if (A.length) {   // the mix goes to its own WAV (mp4 cannot hold PCM) — mux.s
 run('ffmpeg', args);
 
 /* ── captions → .srt (same millisecond rounding as core/render/srt.py) ── */
-if (Array.isArray(E.captions) && E.captions.length) {
-  const cues = [...E.captions].sort((a, b) => a.t0 - b.t0);
-  for (let k = 0; k < cues.length - 1; k++) cues[k].t1 = Math.min(cues[k].t1, cues[k + 1].t0);
+if (cues && cues.length) {
   const fmt = (s) => { const ms = Math.round(Math.max(0, s) * 1000);
     return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`; };
   const srtPath = E.srt || path.join(outDir, `${base}.srt`);
